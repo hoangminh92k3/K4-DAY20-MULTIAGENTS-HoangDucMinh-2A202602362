@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Simple data query",
+    "iterations": 3,
+    "successes": 3,
+    "success_rate": 1.0,
+    "min_seconds": 0.0015966999999363907,
+    "max_seconds": 0.002955100004328415,
+    "avg_seconds": 0.00225713333687357,
+    "median_seconds": 0.002219600006355904
+  },
+  {
+    "name": "Code generation",
+    "iterations": 3,
+    "successes": 3,
+    "success_rate": 1.0,
+    "min_seconds": 0.0010445999942021444,
+    "max_seconds": 0.0023168999978224747,
+    "avg_seconds": 0.0015437666637202103,
+    "median_seconds": 0.001269799999136012
+  },
+  {
+    "name": "Complex workflow",
+    "iterations": 3,
+    "successes": 3,
+    "success_rate": 1.0,
+    "min_seconds": 0.001684499999100808,
+    "max_seconds": 0.001823099999455735,
+    "avg_seconds": 0.0017716666673853372,
+    "median_seconds": 0.0018074000035994686
+  }
+]

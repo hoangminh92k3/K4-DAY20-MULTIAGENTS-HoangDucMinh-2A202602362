@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .base_worker import BaseWorker
-from .tools import FeedbackGeneratorTool, QualityCheckTool, ScoringTool, ValidationTool
+from tools import ComparisonTool, ReportGeneratorTool, ScoringTool, ValidationTool
 
 
 class EvaluatorAgent(BaseWorker):
@@ -13,8 +13,8 @@ class EvaluatorAgent(BaseWorker):
         tools = [
             ScoringTool(),
             ValidationTool(),
-            QualityCheckTool(),
-            FeedbackGeneratorTool()
+            ComparisonTool(),
+            ReportGeneratorTool(),
         ]
         super().__init__("evaluator_agent", model, tools, result_type="evaluation")
         self.system_prompt = """

@@ -30,7 +30,7 @@ def test_data_agent_init():
 
     assert agent.name == "data_agent"
     assert agent.result_type == "data"
-    assert set(agent.tools) == {"query_database", "pandas_analysis", "parse_csv", "validate_data"}
+    assert set(agent.tools) == {"query_database", "pandas_analysis", "parse_csv", "aggregate_data"}
     assert "Data Analysis Specialist" in agent.system_prompt
 
 
@@ -65,4 +65,4 @@ def test_evaluator_agent():
     assert result["status"] == "success"
     assert result["type"] == "evaluation"
     assert "score" in result["content"]
-    assert {"score_result", "validate_result", "quality_check", "generate_feedback"} == set(EvaluatorAgent(model).tools)
+    assert {"score_result", "validate_result", "compare_results", "generate_report"} == set(EvaluatorAgent(model).tools)

@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .base_worker import BaseWorker
-from .tools import CreateFileTool, EditFileTool, PythonREPLTool, RunScriptTool
+from tools import CreateFileTool, EditFileTool, PythonREPLTool, RunScriptTool
 
 
 class CodeAgent(BaseWorker):

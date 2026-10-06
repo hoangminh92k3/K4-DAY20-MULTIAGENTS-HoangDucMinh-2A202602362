@@ -36,7 +36,7 @@ class Coordinator:
     def __init__(
         self,
         model: Any,
-        worker_agents: Iterable[Any],
+        worker_agents: Iterable[Any] = (),
         message_queue: Any = None,
         max_concurrent_tasks: int | None = None,
     ):
@@ -48,6 +48,15 @@ class Coordinator:
         self.max_concurrent_tasks = max_concurrent_tasks
         self.active_tasks: dict[str, dict[str, Any]] = {}
         self.logger = logging.getLogger("coordinator")
+
+    async def _register_queue_agents(self, queue: Any) -> None:
+        """Register the coordinator and known workers when a queue supports it."""
+        register_agent = getattr(queue, "register_agent", None)
+        if callable(register_agent):
+            for agent_name in ("coordinator", *self.workers):
+                registration = register_agent(agent_name)
+                if inspect.isawaitable(registration):
+                    await registration
 
     def parse_request(self, user_input: str | Mapping[str, Any]) -> dict[str, Any]:
         """Ask the model for a JSON task description and validate its shape."""
@@ -152,6 +161,7 @@ User request: {user_input}
         queue = message_queue if message_queue is not None else self.task_queue
         if not callable(getattr(queue, "send_message", None)) or not callable(getattr(queue, "receive_message", None)):
             raise TypeError("message_queue must provide async send_message and receive_message methods")
+        await self._register_queue_agents(queue)
         if self.max_concurrent_tasks is not None and len(task_list) > self.max_concurrent_tasks:
             raise ResourceExhaustedError(
                 f"received {len(task_list)} tasks; limit is {self.max_concurrent_tasks}"
@@ -227,6 +237,50 @@ User request: {user_input}
             else:
                 results.append(results_by_id[task_id])
         return results
+
+    async def handle_request(self, user_input: str | Mapping[str, Any], timeout: float = 60) -> dict[str, Any]:
+        """Parse, route, execute, and aggregate one user request through the queue."""
+        request = self.parse_request(user_input)
+        worker_names = self.route_task(request["task_type"])
+        tasks = [
+            {
+                "id": f"{request['task_type']}-{index}",
+                "worker": worker_name,
+                "content": user_input if isinstance(user_input, str) else request["parameters"],
+                "parameters": request["parameters"],
+            }
+            for index, worker_name in enumerate(worker_names, start=1)
+        ]
+        await self._register_queue_agents(self.task_queue)
+        responders = [asyncio.create_task(self._serve_one_queued_task(name, timeout)) for name in worker_names]
+        try:
+            results = await self.execute_tasks(tasks, timeout=timeout)
+        finally:
+            await asyncio.gather(*responders, return_exceptions=True)
+        return self.aggregate_results(results)
+
+    async def _serve_one_queued_task(self, worker_name: str, timeout: float) -> None:
+        """Consume one queued task with a local worker and post its result.
+
+        This bridge keeps the same message contract used by remote workers while
+        allowing the project to run end-to-end without a separate worker service.
+        """
+        message = await self.task_queue.receive_message(worker_name, timeout=timeout)
+        payload = message.get("message", message) if isinstance(message, Mapping) else message
+        if not isinstance(payload, Mapping):
+            raise ValueError("worker received a non-object task message")
+        worker = self.workers[worker_name]
+        handler = getattr(worker, "process_async", None) or getattr(worker, "process", None)
+        if handler is None:
+            raise TypeError(f"worker {worker_name} has no process method")
+        parameters = payload.get("parameters")
+        value = handler(payload.get("content")) if parameters is None else handler(payload.get("content"), parameters)
+        result = await value if inspect.isawaitable(value) else value
+        await self.task_queue.send_message(
+            from_agent=worker_name,
+            to_agent="coordinator",
+            message={"type": "result", "task_id": payload["task_id"], "result": result},
+        )
 
     async def execute_tasks_with_retry(
         self,
