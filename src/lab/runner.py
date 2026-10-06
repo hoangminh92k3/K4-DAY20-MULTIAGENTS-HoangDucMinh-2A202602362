@@ -65,7 +65,106 @@ def run_task(task_id: str, condition: str, results_dir="results", model=None, re
     Lỗi khi chạy tác tử KHÔNG được làm chương trình dừng: ghi vào `error` và vẫn chấm điểm.
     Sandbox là thư mục tạm NGOÀI kho mã nguồn và phải được xóa sau khi chạy.
     """
-    raise NotImplementedError("TODO 1: cài đặt run_task (xem guides/pseudocode/03_runner.md)")
+    import tempfile
+    import time
+    from datetime import datetime, timezone
+
+    from langchain_core.callbacks import UsageMetadataCallbackHandler
+
+    from .agent import build_agent
+    from .model import make_model
+
+    if condition not in CONDITIONS:
+        raise ValueError(f"unknown condition: {condition}")
+
+    cfg = CONDITIONS[condition]
+    task = get_task(task_id)
+    skills_dir = ROOT / cfg["skills_dir"] if cfg["skills_dir"] else None
+    output_dir = Path(results_dir) / condition / task_id
+    output_dir.mkdir(parents=True, exist_ok=True)
+    sandbox = Path(tempfile.mkdtemp(prefix="lab-")).resolve()
+    record = {
+        "task": task_id,
+        "condition": condition,
+        "role": task.role,
+        "error": None,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    messages = []
+    final_message = ""
+    usage = UsageMetadataCallbackHandler()
+    started = time.perf_counter()
+
+    try:
+        prepare_sandbox(task, sandbox, skills_dir)
+        skills_hash_before = hash_dir(sandbox / "skills")
+        record["skills_sha256"] = skills_hash_before
+
+        try:
+            agent = build_agent(
+                sandbox,
+                mode=cfg["mode"],
+                use_skills=skills_dir is not None,
+                model=model if model is not None else make_model(),
+            )
+            # Keep the most recent graph state as the agent works.  This
+            # preserves a useful trace and partial grading evidence if a run
+            # reaches the recursion limit instead of discarding all messages.
+            result = {}
+            for state in agent.stream(
+                {"messages": [{"role": "user", "content": task.instruction}]},
+                config={"callbacks": [usage], "recursion_limit": recursion_limit},
+                stream_mode="values",
+            ):
+                result = state
+            messages = result.get("messages", [])
+            if messages:
+                final_message = str(messages[-1].content)
+        except Exception as exc:  # noqa: BLE001
+            record["error"] = f"{type(exc).__name__}: {exc}"
+
+        record["seconds"] = round(time.perf_counter() - started, 1)
+        token_totals = {"input": 0, "output": 0, "total": 0}
+        for model_usage in usage.usage_metadata.values():
+            token_totals["input"] += model_usage.get("input_tokens", 0)
+            token_totals["output"] += model_usage.get("output_tokens", 0)
+            token_totals["total"] += model_usage.get("total_tokens", 0)
+        record["tokens"] = token_totals
+
+        tool_calls = [
+            tool_call
+            for message in messages
+            if isinstance(message, AIMessage)
+            for tool_call in message.tool_calls
+        ]
+        record["tool_calls"] = len(tool_calls)
+        record["subagent_calls"] = sum(call["name"] == "task" for call in tool_calls)
+        skills_read = set()
+        for call in tool_calls:
+            if call["name"] != "read_file":
+                continue
+            file_path = str(call.get("args", {}).get("file_path", "")).replace("\\", "/")
+            marker = "skills/"
+            if marker in file_path:
+                skill_name = file_path.split(marker, 1)[1].split("/", 1)[0]
+                if skill_name:
+                    skills_read.add(skill_name)
+        record["skills_read"] = len(skills_read)
+        record["skills_modified"] = hash_dir(sandbox / "skills") != skills_hash_before
+        record["final_message"] = final_message
+
+        grade_result = grade(task, sandbox / "workspace")
+        record.update({key: grade_result[key] for key in ("score", "passed", "total", "checks")})
+        (output_dir / "trace.md").write_text(render_trace(messages), encoding="utf-8")
+    finally:
+        import shutil
+
+        shutil.rmtree(sandbox, ignore_errors=True)
+
+    (output_dir / "run.json").write_text(
+        json.dumps(record, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    return record
 
 
 def main(argv=None):

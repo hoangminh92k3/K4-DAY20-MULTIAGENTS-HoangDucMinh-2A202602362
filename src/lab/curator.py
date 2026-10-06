@@ -68,7 +68,72 @@ def curate_skills(results_dir="results", source_condition="baseline", out_dir=No
     model mặc định: make_model() (lab.model).
     Trả về: danh sách đường dẫn SKILL.md đã ghi.
     """
-    raise NotImplementedError("TODO: cài đặt curate_skills (xem guides/pseudocode/04_curator.md)")
+    import json
+
+    from .model import make_model
+    from .tasks import ROOT
+
+    results_dir = Path(results_dir)
+    out_dir = Path(out_dir) if out_dir is not None else ROOT / "skills" / "auto"
+    runs = []
+    failed_runs = []
+    for run_path in sorted((results_dir / source_condition).glob("*/run.json")):
+        try:
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if run.get("role") != "learn":
+            continue
+        failed = [
+            (check.get("name", "unnamed"), check.get("detail", ""))
+            for check in run.get("checks", [])
+            if not check.get("passed", False)
+        ]
+        if not failed:
+            continue
+        trace_path = run_path.parent / "trace.md"
+        try:
+            trace = trace_path.read_text(encoding="utf-8")[-6000:]
+        except OSError:
+            trace = ""
+        failed_run = {"task": run.get("task", run_path.parent.name), "failed": failed, "trace": trace}
+        runs.append(failed_run)
+        failed_runs.append(failed_run)
+
+    if not failed_runs:
+        print("Warning: không có check thất bại ở tác vụ học")
+        return []
+
+    examples = []
+    for run in runs:
+        checks = "\n".join(f"- {name}: {detail}" for name, detail in run["failed"])
+        examples.append(
+            f"Task: {run['task']}\nFailed checks:\n{checks}\n"
+            f"Trace (last 6000 characters):\n{run['trace']}"
+        )
+    prompt = (
+        "You write concise procedural skills for a programming and data-analysis agent. "
+        "Use only the learning-task failures and traces below to infer general process improvements. "
+        "Do not include task-specific ids, filenames, answers, or values. Write no more than "
+        f"{max_skills} short skills, each with YAML name and description frontmatter and actionable instructions. "
+        "Use exactly this format for each skill:\n"
+        "=== SKILL: <name> ===\n---\nname: <name>\ndescription: <when to use it>\n---\n"
+        "<instructions>\n=== END ===\n\n"
+        "Learning evidence:\n\n" + "\n\n".join(examples)
+    )
+    model = model if model is not None else make_model()
+    response = model.invoke(prompt)
+    reply = response.content if hasattr(response, "content") else response
+
+    written = []
+    for name, text in parse_skill_blocks(str(reply)):
+        if len(written) >= max_skills or validate_skill(text, expected_name=name):
+            continue
+        skill_path = out_dir / name / "SKILL.md"
+        skill_path.parent.mkdir(parents=True, exist_ok=True)
+        skill_path.write_text(text.rstrip() + "\n", encoding="utf-8")
+        written.append(skill_path)
+    return written
 
 
 if __name__ == "__main__":
